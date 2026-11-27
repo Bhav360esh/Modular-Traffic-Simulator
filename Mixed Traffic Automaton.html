@@ -1,0 +1,421 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Mixed Traffic Automaton</title>
+<style>
+/* Layout: controls left, road and plots right; one column on phones */
+:root{--bg:#f4f6f7;--panel:#fff;--fg:#18222a;--mute:#5b6a75;--line:#d5dde2;--road:#e3e8eb;--acc:#0b6e69;
+--truck:#8a4b1f;--car:#2563a8;--auto:#c08a00;--bike:#7a3fa0}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11171b;--panel:#192127;--fg:#e4eaee;--mute:#93a3ae;--line:#2c3840;--road:#232d34;--acc:#4cc2bb;--truck:#d28a55;--car:#6aa7e8;--auto:#e8bb45;--bike:#bd86e0;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#11171b;--panel:#192127;--fg:#e4eaee;--mute:#93a3ae;--line:#2c3840;--road:#232d34;--acc:#4cc2bb;--truck:#d28a55;--car:#6aa7e8;--auto:#e8bb45;--bike:#bd86e0;color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding-block:16px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1{font-size:20px;margin:0 0 2px}h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 8px;color:var(--mute)}
+.sub{color:var(--mute);margin:0 0 12px}
+.grid{display:grid;grid-template-columns:270px 1fr;gap:14px}@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px;min-width:0}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
+label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:3px 0}
+input[type=number]{width:72px}input,select,button{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:2px 6px}
+button{cursor:pointer;padding:5px 10px}button.p{background:var(--acc);color:var(--panel);border-color:var(--acc)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+details{margin:6px 0}summary{cursor:pointer;font-weight:600}
+canvas{width:100%;display:block}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+.tile{border-left:3px solid var(--acc);padding-left:8px}.tile b{display:block;font-size:18px;font-variant-numeric:tabular-nums}.tile span{color:var(--mute);font-size:12px}
+.key{display:inline-block;width:10px;height:10px;margin:0 4px 0 10px;border-radius:2px}
+.note{color:var(--mute);font-size:12px;margin:6px 0 0}
+</style>
+<div class="wrap">
+<h1>Mixed Traffic Automaton</h1>
+<p class="sub">Cellular automata with trucks, cars, auto-rickshaws and two-wheelers: lane change, overtaking, seepage, creeping and one intersection.</p>
+<div class="grid">
+<div class="panel">
+<h2>Scenario</h2>
+<select id="preset" aria-label="Scenario" style="width:100%">
+<option value="1">Case 1: one-way, no intersection</option><option value="2">Case 2: one-way, intersection</option>
+<option value="3">Case 3: two-way, no intersection</option><option value="4">Case 4: two-way, intersection</option>
+<option value="lanes">Multi-lane with seepage</option><option value="r184">Check: Rule 184</option></select>
+<div class="row"><button class="p" id="run">Pause</button><button id="one">Step</button><button id="reset">Restart</button></div>
+<label>Steps per second <input id="speed" type="number" value="12" min="1" max="200"></label>
+<div id="form"></div>
+</div>
+<div class="col">
+<div class="panel"><h2>Road</h2><canvas id="road"></canvas>
+<p class="note"><span class="key" style="background:var(--truck);margin-left:0"></span>truck<span class="key" style="background:var(--car)"></span>car<span class="key" style="background:var(--auto)"></span>auto<span class="key" style="background:var(--bike)"></span>two-wheeler. All strips travel left to right in their own direction. The vertical mark is the intersection.</p></div>
+<div class="panel"><h2>Current measurements</h2><div class="tiles" id="tiles"></div></div>
+<div class="panel"><h2>Space-time diagram: first link, first lane</h2><canvas id="st"></canvas><p class="note">Position runs across, time runs down. Bands slanting backwards are jams.</p></div>
+<div class="panel"><h2>Flow and mean speed over time</h2><canvas id="ts"></canvas></div>
+<div class="panel"><h2>Fundamental diagram</h2>
+<div class="row"><button class="p" id="sweep">Run density sweep</button><button id="csvS" disabled>Download sweep CSV</button><button id="csvT">Download time series CSV</button></div>
+<canvas id="fd"></canvas><p class="note" id="msg">Each point is a fresh simulation with the settings on the left: 600 warm-up steps, then a 600-step average.</p></div>
+<div class="panel"><h2>Rules and assumptions</h2>
+<details open><summary>From the paper</summary><p>Lengths truck 5, car 4, auto 3, two-wheeler 2 cells; maximum speeds 1, 2, 3, 5 cells per step; speed = min(maximum, gap); right lane tried before left; autos and two-wheelers seep diagonally when blocked; creeping caps speed at 1 near the stop line; signal gives NS the first half of each cycle; unsignalised priority straight, then right, then left.</p></details>
+<details><summary>Choices made where the paper does not say</summary><ul>
+<li>Position is the rear cell. Lateral moves happen first, one vehicle at a time in random order. All speeds are then computed together.</li>
+<li>One conflict cell is shared by all approaches. Only one vehicle may enter per step, and only if its exit has room. This lowers capacity compared with a real junction.</li>
+<li>A turning vehicle is placed just beyond the junction on its new road. One-way roads allow one turn each.</li>
+<li>Overtaking (two-way, one lane) needs a slower leader and a clear opposing stretch; the road space is reserved until it finishes.</li>
+<li>Seepage and lane change need more than one lane per direction. Lateral moves are barred next to the junction.</li>
+<li>With re-entry delay 0 each road is a closed ring. With a delay, vehicles leave and return.</li>
+<li>Random slowdown is an added Nagel-Schreckenberg option, off by default.</li>
+</ul></details>
+<p class="note">Units are cells and time steps. The model is not calibrated against field data.</p></div>
+</div></div></div>
+<script>
+// Cellular automata engine: heterogeneous traffic, seepage, creeping, overtaking, one intersection.
+// Position x is the REAR cell; a vehicle occupies x .. x+L-1. One step = lateral moves (sequential),
+// then speeds (parallel), then intersection arbitration, then movement.
+const TYPES = ['truck','car','auto','bike'];
+const DEFAULTS = {
+  N:200, lanes:1, twoWay:false, intersection:false, density:0.25,
+  mix:{truck:15,car:35,auto:20,bike:30},
+  len:{truck:5,car:4,auto:3,bike:2}, vmax:{truck:1,car:2,auto:3,bike:5},
+  minGap:0, laneChange:true, overtaking:true, gSafe:10, seepage:true, delta:1,
+  creeping:true, dc:5, tau:0, control:'signalised', cycle:60, pL:0.15, pR:0.15,
+  gCrit:6, slow:0, seed:1
+};
+const TURN = {EB:{L:'NB',R:'SB'}, WB:{L:'SB',R:'NB'}, NB:{L:'WB',R:'EB'}, SB:{L:'EB',R:'WB'}};
+const OPP = {EB:'WB',WB:'EB',NB:'SB',SB:'NB'};
+const AXIS = {EB:'EW',WB:'EW',NB:'NS',SB:'NS'};
+const PRIORITY = {S:1,R:2,L:3};
+
+function rng(seed){ let a = seed>>>0; return () => { a=(a+0x6D2B79F5)>>>0; let t=a;
+  t=Math.imul(t^(t>>>15),t|1); t^=t+Math.imul(t^(t>>>7),t|61); return ((t^(t>>>14))>>>0)/4294967296; }; }
+
+class Sim {
+  constructor(user={}){
+    const p = this.p = Object.assign({}, DEFAULTS, user);
+    this.rand = rng(p.seed); this.t = 0; this.ring = p.tau === 0;
+    this.links = ['EB']; if (p.twoWay) this.links.push('WB');
+    if (p.intersection){ this.links.push('NB'); if (p.twoWay) this.links.push('SB'); }
+    this.ix = Math.floor(p.N/2);
+    this.grid = {}; this.res = {};
+    for (const k of this.links){
+      this.grid[k] = Array.from({length:p.lanes},()=>new Int32Array(p.N));
+      this.res[k]  = Array.from({length:p.lanes},()=>new Int32Array(p.N));
+    }
+    this.veh = []; this.crossings = 0; this.turns = 0; this.overtakes = 0; this.seeps = 0; this.changes = 0;
+    this._populate();
+  }
+  _pickType(){ const m=this.p.mix; let s=TYPES.reduce((a,k)=>a+m[k],0), r=this.rand()*s;
+    for (const k of TYPES){ r-=m[k]; if (r<0) return k; } return 'car'; }
+  _pickTurn(link){ if (!this.p.intersection) return 'S';
+    const r=this.rand(); let t = r<this.p.pL ? 'L' : r<this.p.pL+this.p.pR ? 'R' : 'S';
+    if (t!=='S' && !this.links.includes(TURN[link][t])) t='S'; return t; }
+  _populate(){
+    const p=this.p;
+    for (const link of this.links) for (let lane=0; lane<p.lanes; lane++){
+      const list=[]; let used=0; const target=p.density*p.N;
+      for (let tries=0; tries<10*p.N && used<target; tries++){
+        const type=this._pickType(), L=p.len[type];
+        if (used+L+(list.length+1)*p.minGap > p.N) continue;
+        if (used+L/2 > target) break;
+        list.push(type); used+=L;
+      }
+      const free=p.N-used-list.length*p.minGap, extra=new Array(list.length).fill(0);
+      for (let i=0;i<free;i++) if (list.length) extra[Math.floor(this.rand()*list.length)]++;
+      let x=0;
+      list.forEach((type,i)=>{
+        const L=p.len[type];
+        const coversBox = p.intersection && x<=this.ix && this.ix<x+L;
+        if (!coversBox){
+          const v={id:this.veh.length+1, type, L, m:p.vmax[type], link, lane, x, v:0,
+                   turn:this._pickTurn(link), state:'road', wait:0};
+          this.veh.push(v); this._paint(v,v.id);
+        }
+        x+=L+p.minGap+extra[i];
+      });
+    }
+  }
+  _c(c){ const N=this.p.N; return this.ring ? ((c%N)+N)%N : c; }
+  _cells(v){ const out=[]; for (let i=0;i<v.L;i++){ const c=this._c(v.x+i); if (c>=0 && c<this.p.N) out.push(c); } return out; }
+  _paint(v,val){ const g=this.grid[v.link][v.lane]; for (const c of this._cells(v)) g[c]=val; }
+  free(link,lane,c,id=0){
+    c=this._c(c); if (c>=this.p.N) return true; if (c<0) return false;
+    const a=this.grid[link][lane][c], b=this.res[link][lane][c];
+    return (a===0||a===id) && (b===0||b===id);
+  }
+  allFree(link,lane,from,to,id=0){ for (let c=from;c<=to;c++) if (!this.free(link,lane,c,id)) return false; return true; }
+  gap(v,max){ let g=0; const f=v.x+v.L-1; while (g<max && this.free(v.link,v.lane,f+1+g,v.id)) g++; return g; }
+  _speedLimit(v){ return Math.max(0, Math.min(v.m, this.gap(v, v.m+this.p.minGap) - this.p.minGap)); }
+  _toStop(v){ const d=this.ix-1-(v.x+v.L-1); return this.ring ? this._c(d) : (d<0 ? 1e9 : d); }
+  _nearBox(from,to){ // lateral moves are barred in and just around the box
+    if (!this.p.intersection) return false;
+    const lo=this.ix-1, hi=this.ix+1+Math.max(...TYPES.map(k=>this.p.len[k]))+this.p.minGap;
+    for (let c=from;c<=to;c++){ const m=this._c(c); if (m>=lo && m<=hi) return true; } return false;
+  }
+  _laneChange(v){
+    const p=this.p, cur=this.gap(v,v.m+p.minGap);
+    for (const lane of [v.lane+1, v.lane-1]){ // right first, then left
+      if (lane<0||lane>=p.lanes) continue;
+      if (this._nearBox(v.x, v.x+v.L-1)) return false;
+      if (!this.allFree(v.link,lane,v.x-p.minGap,v.x+v.L-1,v.id)) continue;
+      const old=v.lane; v.lane=lane; const g=this.gap(v,v.m+p.minGap); v.lane=old;
+      if (g<=cur) continue;
+      this._paint(v,0); v.lane=lane; this._paint(v,v.id); this.changes++; return true;
+    }
+    return false;
+  }
+  _overtake(v){
+    const p=this.p, N=p.N, opp=OPP[v.link]; const f=v.x+v.L-1;
+    const g=this.gap(v,v.m+p.minGap); const ahead=this._c(f+1+g); if (ahead>=N) return false;
+    const id=this.grid[v.link][v.lane][ahead]; if (!id||id===v.id) return false;
+    const lead=this.veh[id-1]; if (lead.m>=v.m) return false;
+    const k=Math.ceil((g+lead.L+v.L)/(v.m-lead.m)); if (k>15) return false;
+    const leadX = v.x+v.L+g;                       // unwrapped rear of the leader
+    const landing = leadX+lead.L+lead.m*k+p.minGap, end=landing+v.L-1;
+    if (end-v.x+p.gSafe >= N/2) return false;
+    if (!this.ring && end+p.gSafe>=N) return false;
+    if (this._nearBox(v.x, end+p.gSafe)) return false;
+    if (!this.allFree(v.link,v.lane,leadX+lead.L,end,v.id)) return false;
+    for (let c=v.x;c<=end+p.gSafe;c++) if (!this.free(opp,v.lane,N-1-this._c(c),v.id)) return false;
+    this._paint(v,0);
+    const mine=[]; for (let c=landing;c<=end;c++) mine.push([v.link,this._c(c)]);
+    for (let c=v.x;c<=end;c++) mine.push([opp,N-1-this._c(c)]);
+    for (const [l,c] of mine) this.res[l][v.lane][c]=v.id;
+    v.state='overtaking'; v.ot={k, left:k, from:v.x, to:landing, cells:mine}; v.v=(landing-v.x)/k; this.overtakes++;
+    return true;
+  }
+  _seep(v){
+    const p=this.p;
+    for (const lane of [v.lane+1, v.lane-1]){
+      if (lane<0||lane>=p.lanes) continue;
+      if (this._nearBox(v.x, v.x+v.L)) return false;
+      if (!this.allFree(v.link,lane,v.x+1,v.x+v.L-1+p.delta,v.id)) continue;
+      this._paint(v,0); v.lane=lane; v.x+=1;
+      if (this.ring){ if (v.x>=p.N){ v.x-=p.N; this.crossings++; v.turn=this._pickTurn(v.link);} }
+      this._paint(v,v.id); v.v=1; this.seeps++; return true;
+    }
+    return false;
+  }
+  phase(){ return (this.t % this.p.cycle) < this.p.cycle/2 ? 'NS' : 'EW'; }
+  step(){
+    const p=this.p; this.t++;
+    // 1. finish overtakes
+    for (const v of this.veh) if (v.state==='overtaking' && --v.ot.left<=0){
+      for (const [l,c] of v.ot.cells) if (this.res[l][v.lane][c]===v.id) this.res[l][v.lane][c]=0;
+      v.x=v.ot.to; if (this.ring && v.x>=p.N){ v.x-=p.N; this.crossings++; v.turn=this._pickTurn(v.link); }
+      v.state='road'; v.ot=null; this._paint(v,v.id); v.justLanded=true;
+    }
+    // 2. lateral moves in random order
+    const order=this.veh.filter(v=>v.state==='road');
+    for (let i=order.length-1;i>0;i--){ const j=Math.floor(this.rand()*(i+1)); [order[i],order[j]]=[order[j],order[i]]; }
+    const done=new Set();
+    for (const v of order){
+      if (v.justLanded){ v.justLanded=false; done.add(v); continue; }
+      if (this._speedLimit(v) >= v.m) continue;
+      if (p.laneChange && p.lanes>1 && this._laneChange(v)) continue;
+      if (p.twoWay && p.overtaking && p.lanes===1 && this._overtake(v)){ done.add(v); continue; }
+      if (p.seepage && p.lanes>1 && (v.type==='auto'||v.type==='bike') && this._speedLimit(v)===0 && this._seep(v)) done.add(v);
+    }
+    // 3. speeds (all from the same configuration)
+    const movers=order.filter(v=>v.state==='road' && !done.has(v));
+    const req=[];
+    for (const v of movers){
+      let s=this._speedLimit(v);
+      if (p.slow>0 && s>0 && this.rand()<p.slow) s--;
+      if (p.intersection){
+        const d=this._toStop(v);
+        if (p.creeping && d<p.dc) s=Math.min(s,1);
+        v.d=d; if (s>d) req.push(v);
+      }
+      v.v=s;
+    }
+    // 4. intersection: at most one new entry per step, only into an empty box with exit room
+    const turned=new Set();
+    if (req.length){
+      const boxEmpty=this.links.every(l=>this.grid[l].every(g=>g[this.ix]===0));
+      const phase=this.phase(); const ok=[];
+      for (const v of req){
+        if (!boxEmpty) break;
+        if (p.control==='signalised' && AXIS[v.link]!==phase) continue;
+        const target = v.turn==='S' ? v.link : TURN[v.link][v.turn];
+        if (!this.allFree(target,v.lane,this.ix+1,this.ix+v.L+p.minGap,v.id)) continue;
+        if (p.control==='unsignalised'){
+          const mustYield = movers.some(o => o!==v && o.link!==v.link && o.v>0 && o.d<p.gCrit && PRIORITY[o.turn]<PRIORITY[v.turn]);
+          if (mustYield) continue;
+        }
+        ok.push(v);
+      }
+      ok.sort((a,b)=> (p.control==='unsignalised' ? PRIORITY[a.turn]-PRIORITY[b.turn] : 0) || b.wait-a.wait || a.id-b.id);
+      const win=ok[0];
+      for (const v of req) if (v!==win) v.v=v.d;
+      if (win && win.turn!=='S'){
+        this._paint(win,0); win.link=TURN[win.link][win.turn]; win.x=this.ix+1; win.v=1; win.turn='S';
+        this._paint(win,win.id); turned.add(win); this.turns++;
+      }
+    }
+    // 5. move in parallel
+    const moving=movers.filter(v=>!turned.has(v));
+    for (const v of moving) this._paint(v,0);
+    for (const v of moving){
+      v.x+=v.v;
+      if (v.x>=p.N){
+        this.crossings++; v.turn=this._pickTurn(v.link);
+        if (this.ring) v.x-=p.N; else { v.state='buffer'; v.ready=this.t+p.tau; continue; }
+      }
+      this._paint(v,v.id);
+    }
+    for (const v of movers) v.wait = v.v===0 ? v.wait+1 : 0;
+    // 6. lagged re-entry (open boundary only)
+    for (const v of this.veh) if (v.state==='buffer' && v.ready<=this.t){
+      for (let lane=0; lane<p.lanes; lane++){
+        v.x=0; v.lane=lane;
+        if (this.allFree(v.link,lane,0,v.L-1+p.minGap,v.id)){ v.state='road'; v.v=0; this._paint(v,v.id); break; }
+      }
+    }
+  }
+  metrics(){
+    const on=this.veh.filter(v=>v.state!=='buffer'), cells=this.p.N*this.p.lanes*this.links.length;
+    let sv=0, sl=0, stop=0, delay=0;
+    for (const v of on){ sv+=v.v; sl+=v.L; if (v.v===0) stop++; delay+=v.m-v.v; }
+    return {t:this.t, vehicles:on.length, density:on.length/cells, occupancy:sl/cells,
+      speed:on.length?sv/on.length:0, flow:sv/cells, stopped:stop, delay,
+      spaceHeadway:on.length?cells/on.length:0, crossings:this.crossings};
+  }
+  // Collision check used by the tests
+  check(){
+    const seen=new Map(); const box=new Set();
+    for (const v of this.veh) if (v.state==='road') for (const c of this._cells(v)){
+      const key=v.link+':'+v.lane+':'+c;
+      if (seen.has(key)) return `overlap ${key} t=${this.t} #${seen.get(key)} #${v.id}`;
+      if (this.grid[v.link][v.lane][c]!==v.id) return `grid mismatch ${key} t=${this.t}`;
+      if (this.res[v.link][v.lane][c]!==0 && this.res[v.link][v.lane][c]!==v.id) return `drove into reserved ${key} t=${this.t}`;
+      seen.set(key,v.id); if (this.p.intersection && c===this.ix) box.add(v.id);
+    }
+    if (box.size>1) return `box conflict t=${this.t}`;
+    let painted=0; for (const l of this.links) for (const g of this.grid[l]) for (const x of g) if (x) painted++;
+    if (painted!==seen.size) return `ghost cells t=${this.t} ${painted}/${seen.size}`;
+    return null;
+  }
+}
+
+function measure(params, warmup=600, steps=600){
+  const s=new Sim(params); for (let i=0;i<warmup;i++) s.step();
+  const a={density:0,occupancy:0,speed:0,flow:0,stopped:0,delay:0}; const c0=s.crossings;
+  for (let i=0;i<steps;i++){ s.step(); const m=s.metrics(); for (const k in a) a[k]+=m[k]; }
+  for (const k in a) a[k]/=steps;
+  const lanesTotal=s.p.lanes*s.links.length;
+  a.detectorFlow=(s.crossings-c0)/steps/lanesTotal;
+  a.timeHeadway=a.detectorFlow>0?1/a.detectorFlow:null;
+  a.spaceHeadway=a.density>0?1/a.density:null;
+  return a;
+}
+if (typeof module!=='undefined') module.exports={Sim,measure,DEFAULTS,TYPES};
+
+</script>
+<script>
+const $=id=>document.getElementById(id);
+const FIELDS=[['Road',[['N','Road length, cells',50,600],['lanes','Lanes per direction',1,4],['density','Initial occupancy',0.02,0.9,0.01],['tau','Re-entry delay',0,100],['minGap','Minimum gap',0,3],['seed','Random seed',1,99999]]],
+['Behaviour',[['laneChange','Lane change'],['overtaking','Overtaking'],['gSafe','Overtaking safe gap',0,40],['seepage','Seepage'],['delta','Seepage lateral gap',1,5],['creeping','Creeping'],['dc','Creeping distance',1,30],['slow','Random slowdown p',0,0.9,0.05]]],
+['Intersection',[['control','Control',['signalised','unsignalised']],['cycle','Signal cycle, steps',4,300],['pL','Left-turn probability',0,0.5,0.05],['pR','Right-turn probability',0,0.5,0.05],['gCrit','Critical gap',1,30]]],
+['Vehicle mix (weights)',TYPES.map(t=>['mix.'+t,t,0,100])],['Lengths, cells',TYPES.map(t=>['len.'+t,t,1,8])],['Maximum speeds',TYPES.map(t=>['vmax.'+t,t,1,8])]];
+let P, sim, series=[], st=[], sweepRows=[], running=!matchMedia('(prefers-reduced-motion: reduce)').matches, acc=0, last=0, sweeping=false;
+const get=k=>k.split('.').reduce((o,x)=>o[x],P);
+const set=(k,v)=>{const a=k.split('.');if(a[1])P[a[0]][a[1]]=v;else P[a[0]]=v;};
+function preset(id){
+  P=JSON.parse(JSON.stringify(DEFAULTS));
+  if(id==='2')P.intersection=true; if(id==='3')P.twoWay=true; if(id==='4'){P.twoWay=true;P.intersection=true;}
+  if(id==='lanes')P.lanes=3;
+  if(id==='r184'){Object.assign(P,{mix:{truck:0,car:1,auto:0,bike:0},density:0.4,laneChange:false,overtaking:false,seepage:false,creeping:false});P.len.car=1;P.vmax.car=1;}
+  build(); restart(); sweepRows=[]; $('csvS').disabled=true; drawFD();
+}
+function build(){
+  const f=$('form'); f.textContent='';
+  FIELDS.forEach(([title,list],gi)=>{
+    const d=document.createElement('details'); d.open=gi===0; const s=document.createElement('summary'); s.textContent=title; d.appendChild(s);
+    for(const [k,name,a,b,step] of list){
+      const l=document.createElement('label'); l.append(name); let el;
+      if(Array.isArray(a)){el=document.createElement('select');a.forEach(o=>el.add(new Option(o,o)));el.value=get(k);}
+      else{el=document.createElement('input'); if(a===undefined){el.type='checkbox';el.checked=get(k);} else{el.type='number';el.min=a;el.max=b;el.step=step||1;el.value=get(k);}}
+      el.id='f-'+k;
+      el.onchange=()=>{let v=el.type==='checkbox'?el.checked:el.type==='number'?Math.min(b,Math.max(a,+el.value||a)):el.value;
+        if(el.type==='number'){if(!step)v=Math.round(v);el.value=v;} set(k,v);
+        if(TYPES.every(t=>P.mix[t]===0)){P.mix.car=1;$('f-mix.car').value=1;} restart();};
+      l.appendChild(el); d.appendChild(l);
+    }
+    f.appendChild(d);
+  });
+}
+function restart(){ sim=new Sim(JSON.parse(JSON.stringify(P))); series=[]; st=[]; record(); draw(); }
+function record(){
+  const m=sim.metrics(); series.push(m); if(series.length>5000)series.shift();
+  const l=sim.links[0], row=new Uint8Array(sim.p.N);
+  for(const v of sim.veh) if(v.state==='road'&&v.link===l&&v.lane===0) for(const c of sim._cells(v)) row[c]=TYPES.indexOf(v.type)+1;
+  st.push(row); if(st.length>160)st.shift();
+}
+function tick(){ sim.step(); record(); }
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue('--'+n).trim();
+function ctx(id,h){ const c=$(id), w=c.clientWidth||600, r=devicePixelRatio||1; c.width=w*r; c.height=h*r; c.style.height=h+'px';
+  const g=c.getContext('2d'); g.setTransform(r,0,0,r,0,0); g.font='11px system-ui'; return [g,w,h]; }
+function drawRoad(){
+  const lanes=sim.p.lanes, lh=lanes>2?9:13, block=lanes*lh+22, [g,w]=ctx('road',sim.links.length*block);
+  const cw=(w-26)/sim.p.N, col=TYPES.map(css), opp={EB:'WB',WB:'EB',NB:'SB',SB:'NB'};
+  sim.links.forEach((l,i)=>{
+    const y=i*block+6; g.fillStyle=css('road'); g.fillRect(26,y,w-26,lanes*lh); g.fillStyle=css('mute'); g.fillText(l,2,y+lanes*lh/2+4);
+    if(sim.p.intersection){ const x=26+sim.ix*cw; const ew=l==='EB'||l==='WB';
+      g.fillStyle=sim.p.control==='signalised'?((sim.phase()==='EW')===ew?'#1f9d55':'#c0392b'):css('fg');
+      g.fillRect(x,y-4,Math.max(cw,2),lanes*lh+8); }
+  });
+  for(const v of sim.veh){
+    if(v.state==='buffer')continue;
+    let link=v.link, x=v.x;
+    if(v.state==='overtaking'){ const f=1-v.ot.left/v.ot.k; x=v.ot.from+(v.ot.to-v.ot.from)*f; link=opp[v.link]; x=sim.p.N-x-v.L; }
+    x=((x%sim.p.N)+sim.p.N)%sim.p.N;
+    const y=sim.links.indexOf(link)*block+6+(lanes-1-v.lane)*lh; g.fillStyle=col[TYPES.indexOf(v.type)];
+    for(let i=0;i<v.L;i++){ const c=Math.floor(x+i)%sim.p.N; g.fillRect(26+c*cw,y+1,Math.max(cw-(i===v.L-1?1.2:0),.8),lh-2); }
+  }
+}
+function drawST(){ const [g,w,h]=ctx('st',200), cw=w/sim.p.N, col=TYPES.map(css); g.fillStyle=css('road'); g.fillRect(0,0,w,h);
+  st.forEach((row,t)=>row.forEach((v,c)=>{if(v){g.fillStyle=col[v-1];g.fillRect(c*cw,t*h/160,Math.max(cw,1),h/160+.4);}})); }
+function axes(g,w,h,xmax,ymax,xl,yl){
+  g.strokeStyle=css('line');g.fillStyle=css('mute');g.lineWidth=1;
+  for(let i=0;i<=4;i++){const y=24+(h-54)*(1-i/4);g.beginPath();g.moveTo(44,y);g.lineTo(w-8,y);g.stroke();g.fillText((ymax*i/4).toFixed(2),8,y+4);
+    const x=44+(w-52)*i/4;g.fillText(+(xmax*i/4).toFixed(2),x-(i===4?20:6),h-16);}
+  g.fillText(xl,44,h-3); g.fillText(yl,8,9);
+  return [x=>44+(w-52)*x/xmax, y=>24+(h-54)*(1-y/ymax)];
+}
+function drawTS(){ const [g,w,h]=ctx('ts',190); const d=series.slice(-400), t0=d[0].t, span=Math.max(50,d[d.length-1].t-t0);
+  const ymax=Math.max(0.5,...d.map(m=>Math.max(m.speed,m.flow)))*1.05;
+  const [X,Y]=axes(g,w,h,span,ymax,'steps (most recent window)','speed: solid, cells/step.  flow: dashed, vehicles/step/lane');
+  for(const [k,dash,c] of [['speed',[],css('acc')],['flow',[5,3],css('car')]]){g.strokeStyle=c;g.lineWidth=1.6;g.setLineDash(dash);g.beginPath();
+    d.forEach((m,i)=>i?g.lineTo(X(m.t-t0),Y(m[k])):g.moveTo(X(m.t-t0),Y(m[k])));g.stroke();} g.setLineDash([]); }
+function drawFD(){ const [g,w,h]=ctx('fd',230); const r184=$('preset').value==='r184';
+  const ymax=Math.max(r184?0.55:0.2,...sweepRows.map(r=>r.flow))*1.08;
+  const [X,Y]=axes(g,w,h,1,ymax,'occupancy (fraction of cells filled)','flow q, vehicles/step/lane');
+  if(r184){g.strokeStyle=css('mute');g.setLineDash([4,3]);g.beginPath();g.moveTo(X(0),Y(0));g.lineTo(X(.5),Y(.5));g.lineTo(X(1),Y(0));g.stroke();g.setLineDash([]);}
+  g.fillStyle=css('acc'); for(const r of sweepRows){g.beginPath();g.arc(X(r.occupancy),Y(r.flow),3.5,0,7);g.fill();} }
+function tiles(){ const m=series[series.length-1];
+  const rows=[['Step',m.t],['Vehicles on road',m.vehicles],['Density, veh/cell/lane',m.density.toFixed(3)],['Occupancy',m.occupancy.toFixed(3)],['Mean speed, cells/step',m.speed.toFixed(2)],['Flow, veh/step/lane',m.flow.toFixed(3)],['Stopped (queue)',m.stopped],['Delay, speed shortfall',m.delay.toFixed(0)],['Space headway, cells',m.spaceHeadway.toFixed(1)],['Throughput, passes',m.crossings],['Overtakes',sim.overtakes],['Seepage moves',sim.seeps],['Lane changes',sim.changes],['Turns',sim.turns]];
+  const T=$('tiles'); T.textContent='';
+  for(const [n,v] of rows){const d=document.createElement('div');d.className='tile';const b=document.createElement('b');b.textContent=v;const s=document.createElement('span');s.textContent=n;d.append(b,s);T.appendChild(d);} }
+function draw(){ drawRoad(); tiles(); drawST(); drawTS(); }
+function loop(ts){ const dt=Math.min(0.1,(ts-last)/1000); last=ts;
+  if(running&&!sweeping){ acc+=dt*Math.max(1,+$('speed').value||12); let n=0; while(acc>=1&&n<40){tick();acc--;n++;} if(n)draw(); }
+  requestAnimationFrame(loop); }
+async function sweep(){
+  if(sweeping)return; sweeping=true; $('sweep').disabled=true; sweepRows=[];
+  const base=JSON.parse(JSON.stringify(P));
+  for(let i=1;i<=18;i++){ const rho=i*0.05; $('msg').textContent='Running density '+rho.toFixed(2)+' of 0.90';
+    await new Promise(r=>setTimeout(r,0));
+    sweepRows.push(Object.assign({target:+rho.toFixed(2)},measure(Object.assign({},base,{density:rho})))); drawFD(); }
+  $('msg').textContent='Done. '+sweepRows.length+' densities, seed '+base.seed+'. Change the seed and repeat to see the scatter.';
+  sweeping=false; $('sweep').disabled=false; $('csvS').disabled=false;
+}
+function toCSV(rows){ const k=Object.keys(rows[0]); return ['# settings: '+JSON.stringify(P),k.join(','),...rows.map(r=>k.map(x=>r[x]).join(','))].join('\n'); }
+let dl=null, hosted=!!window.claude;
+if(hosted) window.claude.use('downloads').then(d=>{dl=d; if(!d){$('csvS').hidden=true;$('csvT').hidden=true;}});
+async function save(name,rows){ const data=toCSV(rows);
+  try{ if(hosted){ if(dl) await dl.save({filename:name,data}); return; }
+    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([data],{type:'text/csv'})); a.download=name; a.click(); }
+  catch(e){ $('msg').textContent='The file was not saved.'; } }
+$('preset').onchange=e=>preset(e.target.value);
+$('run').onclick=()=>{running=!running;$('run').textContent=running?'Pause':'Run';};
+$('one').onclick=()=>{tick();draw();}; $('reset').onclick=restart; $('sweep').onclick=sweep;
+$('csvS').onclick=()=>save('density_sweep.csv',sweepRows); $('csvT').onclick=()=>save('time_series.csv',series);
+if(!running)$('run').textContent='Run';
+preset('1'); for(let i=0;i<120;i++)tick(); draw(); addEventListener('resize',()=>{draw();drawFD();});
+requestAnimationFrame(t=>{last=t;requestAnimationFrame(loop);});
+</script>
+
+</body></html>
